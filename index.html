@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>MoonClipse 별 파티</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">{"imports":{"three":"./three.module.min.js"}}</script>
+<style>
+#deck{position:fixed;left:0;right:0;bottom:0;top:52px;width:100%;height:calc(100% - 52px);border:0;background:#000}
+#deck.off{visibility:hidden}
+#bar{position:fixed;top:0;left:0;right:0;height:52px;display:flex;align-items:center;gap:14px;padding:0 16px;background:#0b0b0e;border-bottom:1px solid var(--line);z-index:3}
+#bar canvas{width:44px;height:44px}
+#bar .nm{font-family:var(--head);font-size:1.25rem}
+#bar .sc{margin-left:auto;font-size:1.15rem;display:flex;gap:16px}
+#main{position:fixed;left:0;right:0;bottom:0;top:52px;z-index:2;background:var(--bg)}
+#main.off{display:none}
+.center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2.4vh;text-align:center;padding:24px}
+.center h2{font-size:min(7vw,6.4vh)}
+.center p{font-size:1.25rem;color:var(--mute);margin:0;max-width:34em;line-height:1.6}
+.pv{width:min(52vw,38vh);height:min(52vw,38vh)}
+/* 참가 */
+#join{position:fixed;inset:0;overflow:auto;padding:4vh 5vw;display:flex;flex-direction:column;gap:3vh;z-index:4;background:var(--bg)}
+#join h1{font-size:min(8vw,7vh)}#join h1 small{display:block;font-family:var(--body);font-size:.35em;color:var(--acc);letter-spacing:.2em;margin-bottom:.4em}
+.step{display:flex;flex-direction:column;gap:1.4vh}
+.step h3{font-size:1.4rem;color:var(--mute)}
+#code{font-family:var(--head);font-size:2.4rem;letter-spacing:.3em;width:7em;padding:.2em .4em;background:var(--bg2);color:#fff;border:2px solid var(--line2);border-radius:12px;text-align:center}
+.teams{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px}
+.teams button,.chars button{padding:.9em .6em;border-radius:14px;background:var(--bg2);box-shadow:inset 0 0 0 2px var(--line);font-size:1.15rem;font-weight:700}
+.teams button.on,.chars button.on{box-shadow:inset 0 0 0 3px var(--acc);background:#1e1606}
+.teams small,.chars small{display:block;font-weight:400;font-size:.8rem;color:var(--mute);margin-top:.2em}
+.chars-wrap{display:flex;gap:3vw;align-items:center;flex-wrap:wrap}
+.chars{flex:1;min-width:280px;display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
+.chars button:disabled{opacity:.3}
+#cpv{width:min(40vw,34vh);height:min(40vw,34vh);background:radial-gradient(circle,#1b1b24 0,transparent 70%)}
+#tname{font-size:1.2rem;padding:.6em .8em;background:var(--bg2);color:#fff;border:2px solid var(--line2);border-radius:12px;width:min(100%,22em)}
+/* 주사위 */
+.die{width:min(46vw,34vh);height:min(46vw,34vh);border-radius:22%;background:#fbfaf6;color:#1a1418;display:grid;place-items:center;
+  font-family:var(--head);font-size:min(30vw,22vh);box-shadow:0 1.4vh 0 #b9b2a6;transition:transform .1s}
+.die.spin{animation:shake .12s infinite}
+@keyframes shake{0%{transform:rotate(-8deg) scale(1.02)}50%{transform:rotate(8deg) scale(.98)}100%{transform:rotate(-8deg) scale(1.02)}}
+.rank{font-family:var(--head);font-size:min(22vw,20vh);color:var(--acc);line-height:1}
+</style>
+</head>
+<body>
+<div id="join"></div>
+<div id="bar" class="hidden"><canvas id="mini"></canvas><span class="nm"></span><span class="sc"></span></div>
+<iframe id="deck" class="off" allow="fullscreen; accelerometer; gyroscope"></iframe>
+<div id="main" class="off"></div>
+<script type="module">
+import { connect, TEAMS, team, questionsUpTo, esc } from './common.js';
+import { CHARS, preview } from './chars.js';
+import { game, play, fmt } from './games.js';
+
+const ss = (k, v) => { try { if (v === undefined) return sessionStorage.getItem(k); sessionStorage.setItem(k, v); } catch { return null; } };
+const $ = (s) => document.querySelector(s);
+const joinEl = $('#join'), main = $('#main'), deck = $('#deck');
+let net, room, me, state = null, players = {}, view = '', mini;
+
+// ---------- 참가 ----------
+async function start() {
+  room = new URLSearchParams(location.search).get('room') || ss('room');
+  me = ss('me');
+  if (room && me) return enter(room, me); // 새로고침 → 그대로 다시 들어감
+  joinEl.innerHTML = `<h1><small>MOONCLIPSE</small>별 파티 참가하기</h1>
+    <div class="step"><h3>① 방 번호</h3><input id="code" inputmode="numeric" maxlength="4" placeholder="0000" value="${room || ''}"></div>
+    <div class="step"><h3>② 우리 조</h3><div class="teams">${TEAMS.map((t) => `<button data-t="${t.id}"><span class="dot" style="background:${t.color}"></span> ${t.name}<small></small></button>`).join('')}</div></div>
+    <div class="step"><h3>③ 우리 조 캐릭터</h3><div class="chars-wrap"><canvas id="cpv"></canvas><div class="chars">${CHARS.map((c) => `<button data-c="${c.id}">${c.name}<small></small></button>`).join('')}</div></div></div>
+    <div class="step"><h3>④ 조 이름 (안 써도 됨)</h3><input id="tname" maxlength="10" placeholder="예) 은하수 탐험대"></div>
+    <div><button class="btn" id="go" disabled>참가하기</button></div>`;
+  let pickT = null, pickC = null, pv = null;
+  const code = $('#code');
+  const refresh = async () => {
+    const ok = /^\d{4}$/.test(code.value);
+    if (ok && (code.value !== room || !net)) { room = code.value; net = await connect(room); net.onKids('players', (p) => { players = p; mark(); }); }
+    $('#go').disabled = !(ok && pickT && pickC);
+  };
+  // 다른 조가 고른 캐릭터는 못 고른다. 이미 참가한 조는 '참가 중' (다시 고르면 그 조로 다시 들어감)
+  const mark = () => {
+    if (!joinEl.isConnected) return; // 참가 뒤에는 이 화면이 없다
+    joinEl.querySelectorAll('[data-t]').forEach((b) => { b.querySelector('small').textContent = players[b.dataset.t] ? `참가 중 · ${CHARS.find((c) => c.id === players[b.dataset.t].char)?.name || ''}` : ''; });
+    joinEl.querySelectorAll('[data-c]').forEach((b) => {
+      const owner = Object.entries(players).find(([t, p]) => p.char === b.dataset.c && t !== pickT);
+      b.disabled = !!owner; b.querySelector('small').textContent = owner ? team(owner[0]).name : '';
+      if (owner && pickC === b.dataset.c) { pickC = null; b.classList.remove('on'); }
+    });
+    refresh();
+  };
+  code.addEventListener('input', refresh);
+  joinEl.querySelectorAll('[data-t]').forEach((b) => b.addEventListener('click', () => {
+    pickT = b.dataset.t; joinEl.querySelectorAll('[data-t]').forEach((x) => x.classList.toggle('on', x === b));
+    const mine = players[pickT];
+    if (mine) { pickC = mine.char; $('#tname').value = mine.name === team(pickT).name ? '' : mine.name; joinEl.querySelectorAll('[data-c]').forEach((x) => x.classList.toggle('on', x.dataset.c === pickC)); }
+    if (pickC) pv ? pv.set(pickC, team(pickT).color) : (pv = preview($('#cpv'), pickC, team(pickT).color));
+    mark();
+  }));
+  joinEl.querySelectorAll('[data-c]').forEach((b) => b.addEventListener('click', () => {
+    pickC = b.dataset.c; joinEl.querySelectorAll('[data-c]').forEach((x) => x.classList.toggle('on', x === b));
+    const col = pickT ? team(pickT).color : '#888';
+    pv ? pv.set(pickC, col) : (pv = preview($('#cpv'), pickC, col));
+    refresh();
+  }));
+  $('#go').addEventListener('click', async () => {
+    await net.set(`players/${pickT}`, { char: pickC, name: $('#tname').value.trim() || team(pickT).name });
+    pv?.stop();
+    ss('room', room); ss('me', pickT);
+    enter(room, pickT);
+  });
+  refresh();
+}
+
+async function enter(r, t) {
+  room = r; me = t;
+  net = net || await connect(room);
+  // 예전 방에 다시 들어왔는데 우리 조가 없으면(새 게임 등) 참가 화면으로
+  if (!(await net.get(`players/${me}`))) { try { sessionStorage.removeItem('me'); } catch {} me = null; net = null; return start(); }
+  joinEl.remove();
+  $('#bar').classList.remove('hidden');
+  net.onKids('players', (p) => { players = p; render(); });
+  net.on('state', (s) => { state = s; render(); });
+}
+const send = (msg) => net.set(`in/${me}`, { ...msg, gid: state?.gid, n: Date.now() });
+
+// ---------- 화면 ----------
+function render() {
+  const p = players[me];
+  if (!p) return;
+  const sp = state?.players?.[me];
+  $('#bar .nm').innerHTML = `<span class="dot" style="background:${team(me).color}"></span> ${esc(p.name)}`;
+  $('#bar .sc').innerHTML = sp ? `<span class="star">★ ${sp.stars}</span><span class="coin">● ${sp.coins}</span>` : '';
+  if (!mini) mini = preview($('#mini'), p.char, team(me).color);
+
+  const ph = state?.phase || 'lobby';
+  const lesson = ph === 'lesson';
+  if (lesson && state.deck && deck.dataset.src !== state.deck) { deck.src = state.deck; deck.dataset.src = state.deck; } // 한 번만 불러온다
+  deck.classList.toggle('off', !lesson);
+  main.classList.toggle('off', lesson);
+  // 같은 화면이면 다시 그리지 않는다(게임 · 주사위 진행 중 보호)
+  const key = ph + '|' + ({ roll: state?.turn, quiz: state?.turn + ':' + !!state?.quiz?.[me], 'mg-intro': state?.mg?.nonce, 'mg-play': state?.mg?.nonce, 'mg-result': state?.mg?.nonce }[ph] ?? '');
+  if (key === view) return;
+  view = key;
+  (VIEW[ph] || VIEW.watch)();
+}
+
+// 화면을 바꿀 때 이전 3D 미리보기(WebGL)는 멈추고 버린다
+let pvCur = null;
+const clear = () => { pvCur?.stop(); pvCur = null; main.innerHTML = ''; };
+const showPv = () => { pvCur = preview(main.querySelector('.pv'), players[me].char, team(me).color); };
+const center = (html) => { clear(); main.innerHTML = `<div class="center">${html}</div>`; return main.firstChild; };
+const VIEW = {
+  lobby() {
+    center(`<canvas class="pv"></canvas><h2>참가 완료!</h2><p>선생님이 게임을 시작하면 수업 화면이 열린다.<br>큰 화면에 우리 캐릭터가 보이는지 확인하자.</p>`);
+    showPv();
+  },
+  watch() {
+    center(`<canvas class="pv"></canvas><h2>큰 화면을 보자!</h2>`);
+    showPv();
+  },
+  roll() {
+    const done = state.rolls?.[me];
+    const el = center(`<h2>${done ? `${done} 칸 이동!` : '주사위를 굴리자'}</h2><button class="die">${done || '?'}</button><p>${done ? '큰 화면을 보자' : '주사위를 누르자'}</p>`);
+    if (done) return;
+    const die = el.querySelector('.die');
+    die.addEventListener('click', () => {
+      if (die.classList.contains('spin')) return;
+      die.classList.add('spin');
+      const iv = setInterval(() => { die.textContent = 1 + Math.floor(Math.random() * 6); }, 70);
+      setTimeout(() => {
+        clearInterval(iv); die.classList.remove('spin');
+        const v = 1 + Math.floor(Math.random() * 6);
+        die.textContent = v;
+        el.querySelector('h2').textContent = `${v} 칸 이동!`; el.querySelector('p').textContent = '큰 화면을 보자';
+        send({ act: 'roll', turn: state.turn, v });
+      }, 1000);
+    });
+  },
+  quiz() {
+    const q = state.quiz?.[me];
+    if (!q) return VIEW.watch();
+    clear(); main.innerHTML = '<div class="qz"></div>';
+    const el = main.firstChild;
+    el.innerHTML = `<div class="qz-top">퀴즈 칸! 맞히면 코인 +5</div><div class="qz-q">${esc(q.q)}</div>
+      <div class="qz-c">${q.c.map((c, k) => `<button data-k="${k}">${esc(c)}</button>`).join('')}</div>`;
+    el.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+      el.querySelectorAll('button').forEach((x) => { x.disabled = true; x.classList.toggle('ok', +x.dataset.k === q.a); });
+      if (+b.dataset.k !== q.a) b.classList.add('no');
+      send({ act: 'quiz', turn: state.turn, k: +b.dataset.k });
+    }));
+  },
+  'mg-intro'() {
+    const g = game(state.mg.id);
+    const el = center(`<p style="color:var(--acc);letter-spacing:.2em">MINI GAME · ${g.tag}</p><h2>${g.title}</h2><p>${g.desc}</p><p><b>${g.how}</b></p><p>선생님이 시작하면 3, 2, 1!</p>`);
+    // 아이폰 · 아이패드는 기울기 센서를 쓰려면 한 번 눌러 허용해야 한다
+    if (g.tilt && typeof DeviceOrientationEvent?.requestPermission === 'function') {
+      el.insertAdjacentHTML('beforeend', '<button class="btn">기울기 센서 허용</button>');
+      el.querySelector('.btn').addEventListener('click', (e) => DeviceOrientationEvent.requestPermission().then(() => e.target.remove()).catch(() => {}));
+    }
+  },
+  async 'mg-play'() {
+    const mg = state.mg, g = game(mg.id);
+    clear();
+    let lastLive = '';
+    const live = (t) => { if (t !== lastLive) { lastLive = t; send({ act: 'mg', nonce: mg.nonce, live: t }); } };
+    const v = await play(mg.id, main, { seed: mg.seed, questions: questionsUpTo(state.lesson), live });
+    send({ act: 'mg', nonce: mg.nonce, live: lastLive, v, done: true });
+    if (view.startsWith('mg-play')) center(`<h2>${fmt(g, v)} ${g.unit}</h2><p>다른 조를 기다리는 중…</p>`);
+  },
+  'mg-result'() {
+    const r = state.mgResult?.find((x) => x.tid === me);
+    center(r ? `<p>미니게임 결과</p><div class="rank">${r.rank}등</div><h2 class="coin">● +${r.coins}</h2>` : `<h2>결과는 큰 화면에서!</h2>`);
+  },
+  final() {
+    const r = state.final?.findIndex((x) => x.tid === me);
+    center(`<canvas class="pv"></canvas><p>최종 순위</p><div class="rank">${r >= 0 ? r + 1 + '등' : ''}</div>`);
+    showPv();
+  },
+};
+start();
+</script>
+</body>
+</html>
